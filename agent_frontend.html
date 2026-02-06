@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unified Rules Agent</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .main-container { width: 100%; max-width: 1400px; height: 90vh; display: flex; gap: 20px; }
+        .chat-section {
+            flex: 1;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .tools-sidebar {
+            width: 400px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white;
+            padding: 20px;
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tools-content { flex: 1; overflow-y: auto; padding: 20px; background: #fef3c7; }
+        .tool-item {
+            background: white;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            animation: slideInRight 0.3s ease-out;
+        }
+        @keyframes slideInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        .tool-item-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-weight: 600; color: #92400e; }
+        .tool-item-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; }
+        .tool-item-status.pending { background: #f59e0b; animation: pulse 1.5s infinite; }
+        .tool-item-name { flex: 1; }
+        .tool-item-time { font-size: 12px; color: #78350f; }
+        .tool-item-args {
+            background: #fef3c7;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #78350f;
+            white-space: pre-wrap;
+            margin-bottom: 8px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .tool-item-result {
+            background: #dbeafe;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #1e40af;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .tool-item-result.error { background: #fee2e2; color: #991b1b; }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+        .status-panel { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+        .status-item { display: flex; align-items: center; gap: 8px; font-size: 13px; background: rgba(255, 255, 255, 0.2); padding: 6px 12px; border-radius: 15px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 2s infinite; }
+        .status-dot.connected { background: #4ade80; }
+        .status-dot.active { background: #fbbf24; }
+        .status-dot.waiting { background: #60a5fa; }
+        .status-dot.error { background: #ef4444; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .chat-container { flex: 1; overflow-y: auto; padding: 30px; background: #f8f9fa; }
+        .message { margin-bottom: 20px; display: flex; gap: 15px; animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { flex-direction: row-reverse; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+        .message.user .avatar { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .message.assistant .avatar { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .message-content { max-width: 70%; padding: 15px 20px; border-radius: 18px; line-height: 1.6; word-wrap: break-word; }
+        .message.user .message-content { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .message.assistant .message-content { background: white; color: #1f2937; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); }
+        .message-content code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 14px; }
+        .message-content pre { background: #1e293b; color: #e2e8f0; padding: 15px; border-radius: 8px; overflow-x: auto; margin: 10px 0; }
+        .message-content pre code { background: none; padding: 0; color: #e2e8f0; }
+        .message.assistant .message-content.streaming::after { content: '▊'; animation: blink 1s infinite; margin-left: 2px; }
+        @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+        .input-container { padding: 20px 30px; background: white; border-top: 1px solid #e5e7eb; display: flex; gap: 15px; align-items: flex-end; }
+        .input-wrapper { flex: 1; position: relative; }
+        #messageInput { width: 100%; padding: 12px 20px; border: 2px solid #e5e7eb; border-radius: 25px; font-size: 15px; outline: none; resize: none; font-family: inherit; max-height: 120px; transition: border-color 0.3s; }
+        #messageInput:focus { border-color: #667eea; }
+        #messageInput:disabled { background: #f3f4f6; cursor: not-allowed; }
+        .button-group { display: flex; gap: 10px; }
+        button { padding: 12px 24px; border: none; border-radius: 25px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s; display: flex; align-items: center; gap: 8px; }
+        #sendButton { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        #sendButton:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
+        #sendButton:disabled { opacity: 0.5; cursor: not-allowed; }
+        #newChatButton, #mcpToggle { background: #f3f4f6; color: #374151; }
+        #newChatButton:hover, #mcpToggle:hover { background: #e5e7eb; }
+        #mcpToggle.active { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; }
+        .welcome-screen { text-align: center; padding: 60px 30px; color: #6b7280; }
+        .welcome-screen h2 { font-size: 28px; color: #1f2937; margin-bottom: 15px; }
+        .feature-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-top: 30px; text-align: left; }
+        .feature-item { padding: 15px; background: white; border: 2px solid #e5e7eb; border-radius: 12px; }
+        .feature-item .icon { font-size: 24px; margin-bottom: 8px; }
+        .feature-item .title { font-weight: 600; color: #1f2937; margin-bottom: 5px; }
+        .feature-item .desc { font-size: 13px; color: #6b7280; }
+        .error-message, .warning-message { padding: 12px 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid; }
+        .error-message { background: #fee2e2; border-left-color: #ef4444; color: #991b1b; }
+        .warning-message { background: #fef3c7; border-left-color: #f59e0b; color: #92400e; }
+        .chat-container::-webkit-scrollbar, .tools-content::-webkit-scrollbar { width: 8px; }
+        .chat-container::-webkit-scrollbar-thumb, .tools-content::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .empty-tools { text-align: center; padding: 40px 20px; color: #78350f; }
+        .empty-tools-icon { font-size: 48px; margin-bottom: 15px; opacity: 0.5; }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="chat-section">
+            <div class="header">
+                <h1><span>🛡️</span> Unified Rules Agent</h1>
+                <div class="status-panel">
+                    <div class="status-item">
+                        <div class="status-dot connected" id="connectionDot"></div>
+                        <span id="connectionStatus">Connected</span>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-dot waiting" id="conversationDot"></div>
+                        <span id="conversationStatus">Ready</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-container" id="chatContainer">
+                <div class="welcome-screen">
+                    <h2>👋 Welcome to Unified Rules Agent</h2>
+                    <p>Generate detection rules for multiple platforms using AI</p>
+                    <div class="feature-list">
+                        <div class="feature-item"><div class="icon">🔍</div><div class="title">Smart Search</div><div class="desc">Search reference rules from database</div></div>
+                        <div class="feature-item"><div class="icon">✨</div><div class="title">Rule Generation</div><div class="desc">Generate production-ready rules</div></div>
+                        <div class="feature-item"><div class="icon">🌐</div><div class="title">Multi-Language</div><div class="desc">Splunk, Elastic, Snort, Sigma</div></div>
+                        <div class="feature-item"><div class="icon">🔧</div><div class="title">MCP Tools</div><div class="desc">Powered by MCP protocol</div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea id="messageInput" placeholder="Describe the detection behavior... (Enter to send)" rows="1"></textarea>
+                </div>
+                <div class="button-group">
+                    <button id="mcpToggle" class="active" onclick="toggleMCP()"><span id="mcpIcon">✅</span><span>MCP</span></button>
+                    <button id="newChatButton" onclick="newChat()"><span>🔄</span>New</button>
+                    <button id="sendButton" onclick="sendMessage()"><span>📤</span>Send</button>
+                </div>
+            </div>
+        </div>
+        <div class="tools-sidebar">
+            <div class="sidebar-header"><span>🔧</span><span>Tool Calls</span></div>
+            <div class="tools-content" id="toolsContent">
+                <div class="empty-tools"><div class="empty-tools-icon">🔧</div><div>Waiting for tool calls...</div></div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const API_BASE_URL = 'http://localhost:20001';
+        let currentSessionId = null;
+        let isStreaming = false;
+        let mcpEnabled = true;
+        let conversationState = 'waiting';
+        let toolCallCounter = 0;
+
+        function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+        function parseMarkdown(text) {
+            if (!text) return '';
+            let html = text;
+            html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (m, l, c) => '<pre><code>' + escapeHtml(c.trim()) + '</code></pre>');
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\n\n/g, '</p><p>');
+            html = '<p>' + html + '</p>';
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+        function renderMarkdown(el, content) { try { el.innerHTML = parseMarkdown(content); } catch (e) { el.textContent = content; } }
+        function updateConversationState(state, text) {
+            conversationState = state;
+            document.getElementById('conversationDot').className = 'status-dot ' + state;
+            document.getElementById('conversationStatus').textContent = text;
+        }
+        function updateConnectionStatus(connected) {
+            document.getElementById('connectionDot').className = 'status-dot ' + (connected ? 'connected' : 'error');
+            document.getElementById('connectionStatus').textContent = connected ? 'Connected' : 'Disconnected';
+        }
+        function toggleMCP() {
+            mcpEnabled = !mcpEnabled;
+            const toggle = document.getElementById('mcpToggle');
+            document.getElementById('mcpIcon').textContent = mcpEnabled ? '✅' : '🔧';
+            toggle.classList.toggle('active', mcpEnabled);
+        }
+
+        async function newChat() {
+            try {
+                updateConnectionStatus(false);
+                updateConversationState('waiting', 'Connecting...');
+                const response = await fetch(`${API_BASE_URL}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enable_mcp: mcpEnabled })
+                });
+                if (!response.ok) throw new Error('Failed');
+                const data = await response.json();
+                currentSessionId = data.session_id;
+                document.getElementById('chatContainer').innerHTML = `
+                    <div class="welcome-screen">
+                        <h2>✅ Session Created</h2>
+                        <p>Session: ${data.session_id.substring(0, 8)}...</p>
+                        <p>MCP: ${mcpEnabled ? '✅ Enabled' : '❌ Disabled'} (${data.tools_count} tools)</p>
+                    </div>`;
+                document.getElementById('toolsContent').innerHTML = '<div class="empty-tools"><div class="empty-tools-icon">🔧</div><div>Waiting...</div></div>';
+                toolCallCounter = 0;
+                document.getElementById('messageInput').disabled = false;
+                updateConnectionStatus(true);
+                updateConversationState('waiting', 'Ready');
+            } catch (e) {
+                console.error(e);
+                updateConnectionStatus(false);
+                showError('Cannot connect');
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            let message = input.value.trim();
+            if (!message || isStreaming || !currentSessionId) return;
+            input.value = '';
+            const welcome = document.querySelector('.welcome-screen');
+            if (welcome) welcome.remove();
+            addMessage('user', message);
+            updateConversationState('active', 'Thinking...');
+            isStreaming = true;
+            updateSendButton(false);
+            try {
+                const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: currentSessionId, message })
+                });
+                if (!response.ok) throw new Error('Failed');
+                const assistantDiv = createAssistantMessage();
+                const contentDiv = assistantDiv.querySelector('.message-content');
+                let fullContent = '';
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                handleStreamEvent(data, contentDiv);
+                                if (data.type === 'content' && data.content) {
+                                    fullContent += data.content;
+                                    renderMarkdown(contentDiv, fullContent);
+                                    scrollToBottom();
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+                contentDiv.classList.remove('streaming');
+            } catch (e) {
+                showError('Send failed');
+                updateConversationState('error', 'Error');
+            } finally {
+                isStreaming = false;
+                updateSendButton(true);
+            }
+        }
+
+        function handleStreamEvent(data, contentDiv) {
+            if (data.type === 'content' && data.done) { contentDiv.classList.remove('streaming'); updateConversationState('waiting', 'Ready'); }
+            else if (data.type === 'tool_call_start') { updateConversationState('active', '🔧 Calling...'); addToolCall(data.tool_name, data.arguments); }
+            else if (data.type === 'tool_call_result') { updateConversationState('active', '📊 Processing...'); updateToolCallResult(data.tool_name, data.result, data.success, data.error, data.duration_ms); }
+            else if (data.type === 'finish') { updateConversationState('completed', '✅ Done'); document.getElementById('messageInput').disabled = true; }
+            else if (data.type === 'error') { showError(data.error); updateConversationState('error', 'Error'); }
+            else if (data.type === 'warning') showWarning(data.message);
+            else if (data.type === 'done') updateConversationState('waiting', 'Ready');
+        }
+
+        function createAssistantMessage() {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.innerHTML = '<div class="avatar">🤖</div><div class="message-content streaming"></div>';
+            container.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+        function addMessage(role, content) {
+            const container = document.getElementById('chatContainer');
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🤖';
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+            div.appendChild(avatar);
+            div.appendChild(contentDiv);
+            container.appendChild(div);
+            scrollToBottom();
+        }
+        function addToolCall(name, args) {
+            toolCallCounter++;
+            const container = document.getElementById('toolsContent');
+            const empty = container.querySelector('.empty-tools');
+            if (empty) empty.remove();
+            const item = document.createElement('div');
+            item.className = 'tool-item';
+            item.id = `tool-${toolCallCounter}`;
+            let argsStr = JSON.stringify(args, null, 2);
+            if (argsStr.length > 300) argsStr = argsStr.substring(0, 300) + '...';
+            item.innerHTML = `
+                <div class="tool-item-header"><span class="tool-item-status pending"></span><span class="tool-item-name">${name}</span><span class="tool-item-time">${new Date().toLocaleTimeString()}</span></div>
+                <div class="tool-item-args">${escapeHtml(argsStr)}</div>
+                <div style="color:#78350f;font-size:13px">⏳ Executing...</div>`;
+            container.insertBefore(item, container.firstChild);
+        }
+        function updateToolCallResult(name, result, success, error, duration) {
+            const items = document.querySelectorAll('.tool-item');
+            for (let item of items) {
+                if (item.querySelector('.tool-item-name')?.textContent === name) {
+                    item.querySelector('.tool-item-status').classList.remove('pending');
+                    const exec = item.querySelector('div[style*="Executing"]');
+                    if (exec) exec.remove();
+                    const div = document.createElement('div');
+                    div.className = success ? 'tool-item-result' : 'tool-item-result error';
+                    let text = success ? `✅ ${duration?.toFixed(0) || 0}ms\n\n` : `❌ ${error}\n\n`;
+                    if (result) { let r = typeof result === 'string' ? result : JSON.stringify(result, null, 2); if (r.length > 500) r = r.substring(0, 500) + '...'; text += r; }
+                    div.textContent = text;
+                    item.appendChild(div);
+                    break;
+                }
+            }
+        }
+        function showError(msg) { const div = document.createElement('div'); div.className = 'error-message'; div.textContent = '❌ ' + msg; document.getElementById('chatContainer').appendChild(div); scrollToBottom(); }
+        function showWarning(msg) { const div = document.createElement('div'); div.className = 'warning-message'; div.textContent = '⚠️ ' + msg; document.getElementById('chatContainer').appendChild(div); scrollToBottom(); }
+        function updateSendButton(enabled) {
+            document.getElementById('sendButton').disabled = !enabled;
+            document.getElementById('messageInput').disabled = !enabled && conversationState !== 'completed';
+            document.getElementById('sendButton').innerHTML = enabled ? '<span>📤</span>Send' : '<span>⏳</span>...';
+        }
+        function scrollToBottom() { const c = document.getElementById('chatContainer'); c.scrollTop = c.scrollHeight; }
+
+        window.addEventListener('load', async () => {
+            await newChat();
+            const input = document.getElementById('messageInput');
+            input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!input.disabled) sendMessage(); } });
+        });
+    </script>
+</body>
+</html>
