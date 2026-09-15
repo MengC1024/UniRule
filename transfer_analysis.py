@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Analyze cross-setting prediction from the same JSONL judgments as fit_bt.py.
+
+Source schemes: all other settings, and settings sharing neither the target
+language nor its input form (8:1 and 4:1 for a complete 3 by 3 design).
+Groups all input forms of an original rule in one cross-validation fold.
+Requires numpy, scipy and fit_bt.py in the same directory. No model API calls.
+"""
+from __future__ import annotations
+
+import argparse
+import itertools
+from pathlib import Path
+import sys
+
+import numpy as np
+
+from fit_bt import (OUTCOMES, bt_design, fit_logistic, load_comparisons,
+                    select_methods, write_result)
+
+
+PREDICTORS = ("equal_scores", "source_ranking", "pairwise_rates", "bt")
+# Absolute tolerance on BT score differences, independent of the reference method.
+RANK_TIE_ATOL = 1e-8
+
+
+def source_models(n, y, pairs, methods, position=True):
+    n, y = np.atleast_2d(n), np.atleast_2d(y)
+    _, design, nonreference, _ = bt_design(methods, methods[0], position)
+    theta, bt = fit_logistic(n, y, design)
+    scores = np.zeros((len(theta), len(methods)))
+    for j, method in enumerate(nonreference):
+        scores[:, methods.index(method)] = theta[:, j]
+    differences = np.stack([scores[:, methods.index(a)]-scores[:, methods.index(b)]
+                            for a, b in pairs], axis=1)
+    signed = np.where(np.abs(differences) <= RANK_TIE_ATOL, 0.0, np.sign(differences))
+    rank_design = np.stack([signed, np.ones_like(signed)], axis=-1) if position else signed[..., None]
+    equal = fit_logistic(n, y, np.ones((len(pairs), 1)))[1] if position else np.full_like(bt, 0.5)
+    ranking = equal.copy()
+    # When all scores tie, only the presentation effect remains identifiable.
+    distinct = np.any(signed != 0, axis=1)
+    if distinct.any():
+        _, ranking[distinct] = fit_logistic(n[distinct], y[distinct], rank_design[distinct])
+    unordered = list(itertools.combinations(methods, 2))
+    pair_design = np.zeros((len(pairs), len(unordered)+int(position)))
+    for i, (a, b) in enumerate(pairs):
+        edge = (a, b) if methods.index(a) < methods.index(b) else (b, a)
+        pair_design[i, unordered.index(edge)] = 1 if edge == (a, b) else -1
+    if position:
+        pair_design[:, -1] = 1
+    _, separate = fit_logistic(n, y, pair_design)
+    return {"bt": bt, "source_ranking": ranking, "pairwise_rates": separate, "equal_scores": equal}
+
+
+def prepare_data(rows, methods):
+    settings = sorted({(r["language"], r["input_form"]) for r in rows})
+    groups = sorted({(r["language"], r["rule_id"]) for r in rows})
+    setting_index = {s: i for i, s in enumerate(settings)}
+    group_index = {g: i for i, g in enumerate(groups)}
+    pairs = list(itertools.permutations(methods, 2))
+    pair_index = {p: i for i, p in enumerate(pairs)}
+    n = np.zeros((len(groups), len(settings), len(pairs)))
+    y, y2 = np.zeros_like(n), np.zeros_like(n)
+    inputs = set()
+    input_counts = np.zeros((len(groups), len(settings)), dtype=int)
+    for row in rows:
+        g = group_index[(row["language"], row["rule_id"])]
+        s = setting_index[(row["language"], row["input_form"])]
+        p = pair_index[(row["method_a"], row["method_b"])]
+        value = OUTCOMES[row["winner"]]
+        n[g, s, p] += 1
+        y[g, s, p] += value
+        y2[g, s, p] += value*value
+        key = (row["language"], row["input_form"], row["input_id"])
+        if key not in inputs:
+            input_counts[g, s] += 1
+            inputs.add(key)
+    return settings, groups, pairs, n, y, y2, input_counts
+
+
+def assign_folds(rows, groups, folds, seed):
+    present = ["fold" in r for r in rows]
+    if any(present):
+        if not all(present):
+            raise ValueError("Supply fold for every comparison or omit it everywhere")
+        saved = {}
+        for row in rows:
+            key = (row["language"], row["rule_id"])
+            if row["fold"] >= folds or saved.setdefault(key, row["fold"]) != row["fold"]:
+                raise ValueError("Fold is out of range or splits one original rule across folds")
+        assignment = np.array([saved[group] for group in groups])
+        for language in sorted({g[0] for g in groups}):
+            observed = {int(f) for g, f in zip(groups, assignment) if g[0] == language}
+            if observed != set(range(folds)):
+                raise ValueError(f"{language} must have original rules in each of the {folds} folds")
+        return assignment, "provided in comparison records"
+    assignment = np.full(len(groups), -1)
+    rng = np.random.default_rng(seed)
+    for language in sorted({g[0] for g in groups}):
+        indices = np.array([i for i, group in enumerate(groups) if group[0] == language])
+        if len(indices) < folds:
+            raise ValueError(f"{language} has fewer original rules than folds; reduce --folds")
+        assignment[rng.permutation(indices)] = np.arange(len(indices)) % folds
+    return assignment, "generated by original rule, stratified by language"
+
+
+def bootstrap_weights(groups, count, seed):
+    weights = np.ones((count+1, len(groups)))
+    rng = np.random.default_rng(seed)
+    for language in sorted({g[0] for g in groups}):
+        indices = np.array([i for i, group in enumerate(groups) if group[0] == language])
+        weights[1:, indices] = rng.multinomial(len(indices), np.full(len(indices), 1/len(indices)), size=count)
+    return weights
+
+
+def estimate(values):
+    return {"estimate": float(values[0]),
+            "ci95": np.quantile(values[1:], [0.025, 0.975]).tolist() if len(values) > 1 else None}
+
+
+def relative_reduction(baseline, mse):
+    if baseline[0] <= 0:
+        return {"estimate": None, "ci95": None, "note": "Undefined because baseline MSE is zero"}
+    point = float((baseline[0]-mse[0])/baseline[0])
+    if np.any(baseline[1:] <= 0):
+        return {"estimate": point, "ci95": None,
+                "note": "Interval undefined because a bootstrap baseline MSE is zero"}
+    return estimate((baseline-mse)/baseline)
+
+
+def summarize(losses, denominator, target_loss):
+    values = {name: loss/denominator for name, loss in losses.items()}
+    reference = target_loss/denominator
+    def metrics(select):
+        mse = {name: value[:, select].mean(axis=1) for name, value in values.items()}
+        target = reference[:, select].mean(axis=1)
+        baseline = mse["equal_scores"]
+        return {
+            "mse": {**{name: estimate(v) for name, v in mse.items()}, "target_data": estimate(target)},
+            "relative_mse_reduction": {name: relative_reduction(baseline, mse[name])
+                                       for name in PREDICTORS if name != "equal_scores"},
+            "bt_minus_target_mse": estimate(mse["bt"]-target),
+            "bt_minus_ranking_mse": estimate(mse["bt"]-mse["source_ranking"]),
+            "bt_minus_pairwise_mse": estimate(mse["bt"]-mse["pairwise_rates"]),
+        }
+    return metrics(np.arange(denominator.shape[1])), [metrics([i]) for i in range(denominator.shape[1])]
+
+
+def run_transfer(rows, *, methods, folds=10, bootstrap=1000, seed=20260914,
+                 scheme="both", position=True):
+    if folds < 2 or bootstrap < 0:
+        raise ValueError("folds must be at least 2; bootstrap must be nonnegative")
+    if scheme not in {"both", "all_other", "disjoint"}:
+        raise ValueError("scheme must be both, all_other or disjoint")
+    if methods is None:
+        raise ValueError("Specify the methods to compare; Section 4.4 uses the three RAG methods")
+    rows, methods = select_methods(rows, methods)
+    settings, groups, pairs, n, y, y2, input_counts = prepare_data(rows, methods)
+    if len(settings) < 2:
+        raise ValueError("Cross-setting analysis needs at least two settings")
+    assignment, fold_source = assign_folds(rows, groups, folds, seed)
+    weights = bootstrap_weights(groups, bootstrap, seed+1)
+    names = ["all_other", "disjoint"] if scheme == "both" else [scheme]
+    masks = {name: [] for name in names}
+    for name in names:
+        for i, (language, form) in enumerate(settings):
+            mask = np.array([j != i if name == "all_other" else (l != language and f != form)
+                             for j, (l, f) in enumerate(settings)])
+            if not mask.any():
+                raise ValueError(f"No {name} source settings for {language}/{form}")
+            masks[name].append(mask)
+    losses = {name: {model: np.zeros((len(weights), len(settings))) for model in PREDICTORS}
+              for name in names}
+    denominator = np.zeros((len(weights), len(settings)))
+    target_loss = np.zeros_like(denominator)
+    fold_details = {name: [[] for _ in settings] for name in names}
+    _, bt_x, _, _ = bt_design(methods, methods[0], position)
+    for fold in range(folds):
+        train, test = assignment != fold, assignment == fold
+        tn, ty = [np.einsum("bg,gso->bso", weights[:, train], a[train], optimize=True) for a in (n, y)]
+        vn, vy, vy2 = [np.einsum("bg,gso->bso", weights[:, test], a[test], optimize=True) for a in (n, y, y2)]
+        denominator += vn.sum(axis=-1)
+        cache = {}
+        for target, (language, form) in enumerate(settings):
+            if not vn[0, target].sum():
+                continue
+            try:
+                _, local = fit_logistic(tn[:, target], ty[:, target], bt_x)
+                target_loss[:, target] += (vy2[:, target]-2*vy[:, target]*local+vn[:, target]*local**2).sum(axis=-1)
+                for name in names:
+                    mask = masks[name][target]
+                    key = tuple(np.flatnonzero(mask))
+                    if key not in cache:
+                        cache[key] = source_models(tn[:, mask].sum(axis=1), ty[:, mask].sum(axis=1), pairs, methods, position)
+                    for model, prediction in cache[key].items():
+                        losses[name][model][:, target] += (vy2[:, target]-2*vy[:, target]*prediction+vn[:, target]*prediction**2).sum(axis=-1)
+                    fold_details[name][target].append({
+                        "fold": fold, "source_inputs": int(input_counts[train][:, mask].sum()),
+                        "target_training_inputs": int(input_counts[train, target].sum()),
+                        "target_test_inputs": int(input_counts[test, target].sum()),
+                    })
+            except ValueError as exc:
+                raise ValueError(f"Fold {fold}, target {language}/{form}: {exc}") from exc
+        print(f"Completed fold {fold+1}/{folds}", file=sys.stderr, flush=True)
+    if np.any(denominator <= 0):
+        raise ValueError("A bootstrap replicate contains no test comparisons for a setting")
+    result = {
+        "methods": methods, "comparisons": len(rows), "inputs": int(input_counts.sum()),
+        "original_rule_clusters": len(groups), "folds": folds, "fold_source": fold_source,
+        "seed": seed, "bootstrap_replicates": bootstrap, "position_adjusted": position,
+        "uncertainty": "Paired original-rule bootstrap within language, refitting all models with fixed folds; pointwise 95% intervals",
+        "averaging": "Arithmetic mean of MSE over target settings; equal comparison weights within each setting",
+        "difference_direction": "Positive bt_minus_target_mse means BT from sources has higher error",
+        "fold_assignments": [{"language": g[0], "rule_id": g[1], "fold": int(f)} for g, f in zip(groups, assignment)],
+        "schemes": {},
+    }
+    for name in names:
+        overall, per_setting = summarize(losses[name], denominator, target_loss)
+        result["schemes"][name] = {
+            "mean_over_settings": overall,
+            "by_setting": [{"language": language, "input_form": form,
+                            "source_settings": [{"language": settings[j][0], "input_form": settings[j][1]}
+                                                for j in np.flatnonzero(masks[name][i])],
+                            "fold_sample_counts": fold_details[name][i], **per_setting[i]}
+                           for i, (language, form) in enumerate(settings)],
+        }
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("comparisons", help="Same JSONL/JSON input format as fit_bt.py; - reads stdin")
+    parser.add_argument("--methods", nargs="+", required=True,
+                        help="Method identifiers to analyze; Section 4.4 uses the three RAG methods")
+    parser.add_argument("--folds", type=int, default=10)
+    parser.add_argument("--bootstrap", type=int, default=1000, help="0 gives point estimates without intervals")
+    parser.add_argument("--seed", type=int, default=20260914)
+    parser.add_argument("--scheme", choices=("both", "all_other", "disjoint"), default="both")
+    parser.add_argument("--no-position", action="store_true")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    try:
+        result = run_transfer(load_comparisons(args.comparisons), methods=args.methods, folds=args.folds,
+                              bootstrap=args.bootstrap, seed=args.seed, scheme=args.scheme,
+                              position=not args.no_position)
+        write_result(result, args.output)
+    except (ValueError, OSError, np.linalg.LinAlgError) as exc:
+        parser.exit(1, f"Error: {exc}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
