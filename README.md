@@ -1,6 +1,6 @@
 # UniRule
 
-Code for **Toward Unified Detection Rule Generation**.
+Code for **Studying Detection Rule Generation as a Unified Task**.
 
 ## Code availability
 
