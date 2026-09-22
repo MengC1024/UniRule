@@ -45,11 +45,19 @@ def normalize_record(row: dict) -> dict:
         raise ValueError("winner must be A, B or TIE; invalid judgments are not ties")
     if result["method_a"] == result["method_b"]:
         raise ValueError("The two candidates must have different method identifiers")
+    if "fold" in row and "folds" in row:
+        raise ValueError("Supply either fold or folds, not both")
     if "fold" in row:
         fold = row["fold"]
         if isinstance(fold, bool) or not isinstance(fold, int) or fold < 0:
             raise ValueError("fold must be a nonnegative integer")
         result["fold"] = fold
+    if "folds" in row:
+        folds = row["folds"]
+        if (not isinstance(folds, list) or not folds
+                or any(isinstance(f, bool) or not isinstance(f, int) or f < 0 for f in folds)):
+            raise ValueError("folds must be a nonempty list of nonnegative integers")
+        result["folds"] = folds
     return result
 
 
